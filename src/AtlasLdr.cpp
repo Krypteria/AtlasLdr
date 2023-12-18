@@ -19,11 +19,13 @@ void AtlasInject(PVOID pDllAddr, wchar_t* target, char* entryPoint){
     printf("%s - Executing remote thread\n", info);
     HANDLE hExecution = NULL;
 
-    SysPrepare(atlas_utils.atlas_syscalls.NtCreateThreadExSSN, atlas_utils.atlas_syscalls.NtCreateThreadExAddr);
-    NTSTATUS status = SysInvoke(&hExecution, GENERIC_EXECUTE, NULL, hRemote, (LPTHREAD_START_ROUTINE)pExecutionAddr, NULL, FALSE, NULL, NULL, NULL, NULL);
+    fnNtCreateThreadEx sysInvoke = (fnNtCreateThreadEx)C_SyscallPrepare(&atlas_utils, atlas_utils.atlas_syscalls.NtCreateThreadEx);
+    NTSTATUS status = sysInvoke(&hExecution, GENERIC_EXECUTE, NULL, hRemote, (LPTHREAD_START_ROUTINE)pExecutionAddr, NULL, FALSE, NULL, NULL, NULL, NULL);
     if(!NT_SUCCESS(status)){
         ErrorCallback("Execution failed", 0, status, &atlas_utils, &target_data, TRUE);
     }
+
+    C_SyscallCleanup(&atlas_utils, (PVOID)sysInvoke);
 
     CloseHandle(hExecution);
     CloseHandle(hRemote);
@@ -39,25 +41,25 @@ PVOID AtlasLdr(PVOID pDllAddr, HANDLE hRemote, char* entryPoint, ATLAS_UTILS* at
     NTSTATUS status;
 
     RetrieveDLL_DATA(pDllAddr, &dll_data);
-    
-    SysPrepare(atlas_utils->atlas_syscalls.NtAllocateVirtualMemorySSN, atlas_utils->atlas_syscalls.NtAllocateVirtualMemoryAddr);
-    status = SysInvoke(GetCurrentProcess(), &pLocalMappingAddr, 0, &dll_data.imageSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+
+    fnNtAllocateVirtualMemory sysInvoke = (fnNtAllocateVirtualMemory)C_SyscallPrepare(atlas_utils, atlas_utils->atlas_syscalls.NtAllocateVirtualMemory);
+    status = sysInvoke(GetCurrentProcess(), &pLocalMappingAddr, 0, &dll_data.imageSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
     if(!NT_SUCCESS(status)){
         ErrorCallback("Allocation failed", 0, status, NULL, NULL, FALSE);
     }
 
-    SysPrepare(atlas_utils->atlas_syscalls.NtAllocateVirtualMemorySSN, atlas_utils->atlas_syscalls.NtAllocateVirtualMemoryAddr);
-    status = SysInvoke(hRemote, &pTargetAddr, 0, &dll_data.imageSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    status = sysInvoke(hRemote, &pTargetAddr, 0, &dll_data.imageSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+
     if(!NT_SUCCESS(status)){
         ErrorCallback("Allocation failed", 0, status, NULL, NULL, FALSE);
     }
+
+    C_SyscallCleanup(atlas_utils, (PVOID)sysInvoke);
 
     target_data->hRemote = hRemote;
     target_data->pTargetAddr = pTargetAddr;
     target_data->imageSize = dll_data.imageSize;
-
-    
 
     printf("%s - Mapping sections\n", info);
 
@@ -78,7 +80,6 @@ PVOID AtlasLdr(PVOID pDllAddr, HANDLE hRemote, char* entryPoint, ATLAS_UTILS* at
         );
     }
     printf("%s - Sections mapped\n\n", ok);
-
 
     printf("%s - Patching IAT\n", info);
     PatchIAT(pLocalMappingAddr, dll_data, atlas_utils, target_data);

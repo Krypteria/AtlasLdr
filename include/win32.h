@@ -71,12 +71,60 @@ typedef NTSTATUS(NTAPI* fnNtWriteVirtualMemory)(
     PVOID BaseAddress,
     PVOID Buffer,
     ULONG NumberOfBytesToWrite,
-    PULONG  NumberOfBytesWritten 
+    PULONG NumberOfBytesWritten 
+);
+
+typedef NTSTATUS(NTAPI* fnNtQuerySystemInformation)(
+    SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    PVOID SystemInformation,
+    ULONG SystemInformationLength,
+    PULONG ReturnLength
+);
+
+typedef NTSTATUS(NTAPI* fnNtAllocateVirtualMemory)(
+    HANDLE ProcessHandle,
+    PVOID *BaseAddress,
+    ULONG_PTR ZeroBits,
+    PSIZE_T RegionSize,
+    ULONG AllocationType,
+    ULONG Protect
+);
+
+typedef NTSTATUS(NTAPI* fnNtFreeVirtualMemory)(
+    HANDLE ProcessHandle,
+    PVOID *BaseAddress,
+    PSIZE_T RegionSize,
+    ULONG FreeType
+);
+
+typedef NTSTATUS(NTAPI* fnNtProtectVirtualMemory)(
+    HANDLE ProcessHandle,
+    PVOID *baseAddress,
+    PSIZE_T NumberOfBytesToProtect,
+    ULONG NewAccessProtection,
+	PULONG OldAccessProtection
+);
+
+typedef NTSTATUS(NTAPI* fnNtCreateThreadEx) (
+  PHANDLE hThread,
+  ACCESS_MASK DesiredAccess,
+  PVOID ObjectAttributes,
+  HANDLE ProcessHandle,
+  LPTHREAD_START_ROUTINE lpStartAddress,
+  PVOID lpParameter,
+  ULONG Flags,
+  SIZE_T StackZeroBits,
+  SIZE_T SizeOfStackCommit,
+  SIZE_T SizeOfStackReserve,
+  PVOID lpBytesBuffer
 );
 
 struct ATLAS_UTILS {
     fnLdrLoadDll pLdrLoadDll;
     fnNtWriteVirtualMemory pNtWriteVirtualMemory;
+    fnNtAllocateVirtualMemory pNtAllocateVirtualMemory;
+    fnNtFreeVirtualMemory pNtFreeVirtualMemory;
+    fnNtProtectVirtualMemory pNtProtectVirtualMemory;
     ATLAS_SYSCALLS atlas_syscalls;
 };
 
@@ -93,6 +141,9 @@ void RetrieveDLL_DATA(PVOID pDllAddr, DLL_DATA* dll_data);
 void RetrieveUtils(ATLAS_UTILS* atlas_utils);
 
 //Custom implementations
+PVOID C_SyscallPrepare(ATLAS_UTILS* atlas_utils, SYSCALL_INFO syscallInfo);
+VOID C_SyscallCleanup(ATLAS_UTILS* atlas_utils, PVOID pBaseAddr);
+
 size_t C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal);
 PVOID C_GetModuleHandle(DWORD dll);
 BOOL C_LoadLibrary(char* dllName, PHANDLE hDll, ATLAS_UTILS* atlas_utils);

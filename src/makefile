@@ -7,5 +7,4 @@ SOURCE = $(wildcard ./*.cpp)
 EXECUTABLE = atlas_x64.exe
 
 x64:
-	nasm -f win64 ./syscallsAsm.s -o syscallsAsm.o
-	x86_64-w64-mingw32-g++ -w ./syscallsAsm.o $(SOURCE) $(INCLUDE) $(FLAGS) -o ../bin/$(EXECUTABLE)
+	x86_64-w64-mingw32-g++ -w  $(SOURCE) $(INCLUDE) $(FLAGS) -o ../bin/$(EXECUTABLE)

