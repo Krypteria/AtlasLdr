@@ -1,4 +1,4 @@
-Atlas is a fileless reflective x64 loader that has the following features:
+Atlas is a reflective x64 loader that has the following features:
 
 ## Features
 
