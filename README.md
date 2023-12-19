@@ -34,5 +34,12 @@ Atlas needs to be compiled using **x86_64-w64-mingw32-g++**, once you have it on
 
 ![atlascompilation](https://github.com/Krypteria/AtlasLdr/assets/55555187/db6b328f-a916-4ccc-bd14-1d4bead19d8a)
 
+## Future work
+
+- Improve the way the syscalls are made
+- x86 support
+- Give more flexibility to the HTTP client
+- Implement some form of encryption on the remote connection 
+
 ## Disclaimer
 There are improvements that could be made such as modifying the way syscalls are executed with a consistent and error-proof assembly code. In the future this could be implemented.
