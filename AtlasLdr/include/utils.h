@@ -13,6 +13,7 @@
 #define ok "[+]"
 #define info "[*]"
 #define err "[!]"
+#define att "[~]"
 
 struct DLL_DATA {
     PVOID baseAddr;
@@ -25,13 +26,17 @@ struct DLL_DATA {
     SIZE_T entryPoint;
 };
 
-struct TARGET_DATA{
+struct ARTIFACT_DATA{
     HANDLE hRemote;
     PVOID pTargetAddr;
+    PVOID pEntryPoint;
     SIZE_T imageSize;
+    PVOID pImportDirectoryRVA;
+    SIZE_T importDirectorySize;
 };
 
 DWORD C_HashString(wchar_t* string);
+SIZE_T StrLength(char * str);
 BOOL ConvertCharToUnicode(const char* ansiString, PUNICODE_STRING pUnicodeString);
 wchar_t* ConvertCharToWideChar(const char* ansiString);
 

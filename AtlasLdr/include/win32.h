@@ -66,6 +66,14 @@ typedef NTSTATUS(NTAPI* fnLdrLoadDll)(
     HANDLE* ModuleHandle
 );
 
+typedef NTSTATUS(NTAPI* fnNtOpenProcess)(
+    PHANDLE ProcessHandle,
+    ACCESS_MASK AccessMask,
+    POBJECT_ATTRIBUTES ObjectAttributes,
+    PCLIENT_ID ClientId 
+);
+
+
 typedef NTSTATUS(NTAPI* fnNtWriteVirtualMemory)(
     HANDLE ProcessHandle,
     PVOID BaseAddress,
@@ -131,20 +139,23 @@ struct ATLAS_UTILS {
 
 //Main functions
 DWORD FindTargetPid(LPCWSTR target, ATLAS_UTILS* atlas_utils);
-void PatchIAT(PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_utils, TARGET_DATA* target_data);
-void FixRelocations(PVOID pTargetAddr, PVOID pLocalMappingAddr, DLL_DATA dll_data);
-void FixMemoryProtections(TARGET_DATA* target_data, DLL_DATA dll_data, ATLAS_UTILS* atlas_utils);
+VOID PatchIAT(PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_utils, ARTIFACT_DATA* artifact_data);
+VOID FixRelocations(PVOID pTargetAddr, PVOID pLocalMappingAddr, DLL_DATA dll_data);
+VOID FixMemoryProtections(ARTIFACT_DATA* artifact_data, PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_utils);
 
 //Utilities
-void ErrorCallback(const char* msg, DWORD lastError, NTSTATUS status, ATLAS_UTILS* atlas_utils, TARGET_DATA* target_data, BOOL freeMem);
-void RetrieveDLL_DATA(PVOID pDllAddr, DLL_DATA* dll_data);
-void RetrieveUtils(ATLAS_UTILS* atlas_utils);
+VOID ErrorCallback(const char* msg, DWORD lastError, NTSTATUS status, ATLAS_UTILS* atlas_utils, ARTIFACT_DATA* artifact_data, BOOL freeMem);
+BOOL CleanArtifacts(ATLAS_UTILS* atlas_utils, ARTIFACT_DATA* artifact_data);
+VOID RetrieveDLL_DATA(PVOID pDllAddr, DLL_DATA* dll_data);
+VOID RetrieveUtils(ATLAS_UTILS* atlas_utils);
 
 //Custom implementations
 PVOID C_SyscallPrepare(ATLAS_UTILS* atlas_utils, SYSCALL_INFO syscallInfo);
 VOID C_SyscallCleanup(ATLAS_UTILS* atlas_utils, PVOID pBaseAddr);
 
-size_t C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal);
+SIZE_T C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal, ATLAS_UTILS* atlas_utils);
+std::pair<DLL_DATA, DWORD> C_PrepareForwardedProc(SIZE_T funcAddr, ATLAS_UTILS* atlas_utils);
+
 PVOID C_GetModuleHandle(DWORD dll);
 BOOL C_LoadLibrary(char* dllName, PHANDLE hDll, ATLAS_UTILS* atlas_utils);
 

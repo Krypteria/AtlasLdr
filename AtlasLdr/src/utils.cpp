@@ -5,14 +5,27 @@ DWORD C_HashString(wchar_t* string){
     wchar_t character;
 
     while ((character = *string++)){
+        if(character >= L'A' && character <= L'Z'){
+            character += (int)(L'a' - L'A');
+        }
+        
         hash = character + (hash << 6) + (hash << 16) - hash;
     }
 
     return hash;
 }
 
+SIZE_T StrLength(char * str){
+    SIZE_T index = 0;
+    while(str[index] != '\0'){
+        index++;
+    }
+
+    return index;
+}
+
 BOOL ConvertCharToUnicode(const char* ansiString, PUNICODE_STRING pUnicodeString){
-    size_t ansiLength = strlen(ansiString);
+    SIZE_T ansiLength = strlen(ansiString);
 
     pUnicodeString->Buffer = new WCHAR[ansiLength + 1];
     if (pUnicodeString->Buffer == nullptr) {
@@ -30,11 +43,11 @@ BOOL ConvertCharToUnicode(const char* ansiString, PUNICODE_STRING pUnicodeString
 }
 
 wchar_t* ConvertCharToWideChar(const char* ansiString){
-    size_t wAnsiStringLenght = strlen(ansiString) + 1;
+    SIZE_T wAnsiStringLenght = strlen(ansiString) + 1;
 
     wchar_t* wAnsiString = new wchar_t[wAnsiStringLenght];
-    size_t result = mbstowcs(wAnsiString, ansiString, wAnsiStringLenght);
-    if(result == (size_t) - 1){
+    SIZE_T result = mbstowcs(wAnsiString, ansiString, wAnsiStringLenght);
+    if(result == (SIZE_T) - 1){
         delete [] wAnsiString;
         return NULL;
     }
