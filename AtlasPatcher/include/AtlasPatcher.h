@@ -17,7 +17,7 @@
 #define Sys_LdrLoadDll 0x307a4bc5
 
 
-typedef VOID (*AtlasJump)();
+typedef VOID (*AtlasJump)(PVOID hinstDLL, DWORD fdwReason, PVOID lpvReserved);
 
 struct DLL_DATA {
     PVOID baseAddr;

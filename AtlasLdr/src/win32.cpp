@@ -320,10 +320,11 @@ size_t C_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal, A
 
     for(size_t i = 0; i < pExportTable->NumberOfNames; i++){
         char *funcName = (char*)((DWORD_PTR)dll_data.baseAddr + pFuncNames[i]);
-        WORD *funcOrdinal = (WORD*)((DWORD_PTR)dll_data.baseAddr + pOrdinals[i]);
+        WORD funcOrdinal = (WORD)(pExportTable->Base + (DWORD_PTR)dll_data.baseAddr + pOrdinals[i]);
+
         
         if(ordinal != NULL){
-            if(funcOrdinal[i] == ordinal){
+            if(funcOrdinal == ordinal){
                 size_t funcAddr = (size_t)((DWORD_PTR)dll_data.baseAddr + pFuncAddrs[pOrdinals[i]]);
 
                 if(funcAddr >= (DWORD_PTR) pExportTable && funcAddr < ((SIZE_T)pExportTable + pExportedDir.Size)){

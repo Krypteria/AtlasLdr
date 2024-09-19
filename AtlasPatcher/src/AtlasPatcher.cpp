@@ -1,5 +1,6 @@
 #include <AtlasPatcher.h>
 
+
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved){
     switch(fdwReason){ 
         case DLL_PROCESS_ATTACH:
@@ -16,14 +17,13 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved){
 
 extern "C" Exported VOID AtlasPatcher(PVOID lpParameter){
     DLL_DATA dll_data;
-
     ATLASPATCHER_PARAMS* atlasPatcher_params;
     atlasPatcher_params = (ATLASPATCHER_PARAMS*)lpParameter;
 
     PatchIAT(atlasPatcher_params->pDllAddr, (DWORD_PTR)atlasPatcher_params->pImportDirectoryRVA, atlasPatcher_params->importDirectorySize);
-    
+
     AtlasJump fnAtlasExecution = (AtlasJump)atlasPatcher_params->pDllEntryPoint;
-    fnAtlasExecution();
+    fnAtlasExecution(atlasPatcher_params->pDllAddr, DLL_PROCESS_ATTACH, NULL);
 }
 
 VOID PatchIAT(PVOID pDllAddr, DWORD_PTR pImportDirectoryRVA, SIZE_T importDirectorySize){
@@ -47,7 +47,6 @@ VOID PatchIAT(PVOID pDllAddr, DWORD_PTR pImportDirectoryRVA, SIZE_T importDirect
 
         while(pImportDescriptor->Name){
             char * dllName = (char*)((DWORD_PTR)pDllAddr + pImportDescriptor->Name);
-            
             if(!CP_LoadLibrary(dllName, &hDll, pLdrLoadDll)){
                 exit(EXIT_FAILURE);
             }
@@ -155,10 +154,10 @@ SIZE_T CP_GetProcAddress(DLL_DATA dll_data, DWORD targetFuncHash, WORD ordinal, 
 
     for(size_t i = 0; i < pExportTable->NumberOfNames; i++){
         char *funcName = (char*)((DWORD_PTR)dll_data.baseAddr + pFuncNames[i]);
-        WORD *funcOrdinal = (WORD*)((DWORD_PTR)dll_data.baseAddr + pOrdinals[i]);
-        
+        WORD funcOrdinal = (WORD)(pExportTable->Base + (DWORD_PTR)dll_data.baseAddr + pOrdinals[i]);
+
         if(ordinal != NULL){
-            if(funcOrdinal[i] == ordinal){
+            if(funcOrdinal == ordinal){
                 size_t funcAddr = (size_t)((DWORD_PTR)dll_data.baseAddr + pFuncAddrs[pOrdinals[i]]);
                 if(funcAddr >= (DWORD_PTR) pExportTable && funcAddr < ((SIZE_T)pExportTable + pExportedDir.Size)){
                     std::pair<DLL_DATA, DWORD> forwardedFunc = CP_PrepareForwardedProc(funcAddr, pLdrLoadDll);

